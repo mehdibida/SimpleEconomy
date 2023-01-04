@@ -11,8 +11,8 @@ import matplotlib.pyplot as plt
 #3 System_Credit sum(Firm_Credit_Rec[Firm_Existe]) #nombre de crédit, personne n'a de crédit initialement.
 class Economy:
 
-    def __init__(self, Taux_Interet, Prime_D, Firm_Markup, Prod_Ajust, Fonds_Dividende, Taux_Invest_Fonds, Init_Income, Sens_Prix, N_Firm = 100, tol = 10.0**-6) -> None:
-        self.Prop_Durable = 0.0  #Proportion minimum de prêt durable, initialement à zero
+    def __init__(self, Taux_Interet, Prime_D, Firm_Markup, Prod_Ajust, Fonds_Dividende, Taux_Invest_Fonds, Init_Income, Sens_Prix, Init_Prop_Durable=0.0, N_Firm = 100, tol = 10.0**-6) -> None:
+        self.Prop_Durable = Init_Prop_Durable  #Proportion minimum de prêt durable, initialement à zero
         self.Taux_Interet = Taux_Interet #Le taux d'intérêt des Fonds_Avoirs/crédits
         self.Epargne = 0.0
         #self.Qualité_Durable = 2.0 #Qualité des produits vendus par les firmes durables, qualité des non-durables à 1
@@ -35,6 +35,8 @@ class Economy:
         self.Firm_Durable = np.full(N_Firm, False) ##Durable ou pas.
         self.Firm_New_Durable = np.full(N_Firm, False) ##Firmes devenant durables.
 
+        self.Firm_Moment_Creation = np.zeros(N_Firm) ##Iteration at which firm was created
+
         self.Firm_Production = np.zeros(N_Firm) #Production de chaque entreprise
         self.Firm_Profit = np.zeros(N_Firm) #Niveau des profits faits par l'entreprise
         self.Firm_Avoir = np.zeros(N_Firm) #Avoir de l'entreprise
@@ -52,7 +54,7 @@ class Economy:
     def set_prop_durable(self, prop) -> None:
         self.Prop_Durable = prop
 
-    def firm_enter(self, N_Entrants) -> None:
+    def firm_enter(self, N_Entrants, iteration) -> None:
         ##Extend vectors if there is no sufficient place for all active firms
         if N_Entrants > (len(self.Firm_Existe) - sum(self.Firm_Existe)):
             extension_size = N_Entrants - sum(np.logical_not(self.Firm_Existe))
@@ -68,22 +70,34 @@ class Economy:
             self.Firm_Invest_Fonds.resize(len(self.Firm_Invest_Fonds) + extension_size, refcheck = False)
             self.Firm_Demande.resize(len(self.Firm_Demande) + extension_size, refcheck = False)
             self.Firm_Prix.resize(len(self.Firm_Prix) + extension_size, refcheck = False)
+            self.Firm_Moment_Creation.resize(len(self.Firm_Moment_Creation) + extension_size, refcheck = False)
             self.Firm_Prix[np.logical_not(self.Firm_Existe)] = 1.0
-        
-    def firm_decide_production(self, N_Entrants):
+        ###Initialize new firms
         #Liste d'indices dispos qui correspondent aux cases qui vont contenir les nouvelles entreprises
-        Indices_New = np.flatnonzero(np.logical_not(self.Firm_Existe))[:N_Entrants] #le logical_not ici est pour trouver les "false" de Firm_Existe.
-
-        if np.any(self.Firm_Existe):
-            self.Firm_Production[Indices_New] = np.random.uniform(size = len(Indices_New)) #np.mean(self.Firm_Demande[self.Firm_Existe]) *
-        else:
-            self.Firm_Production[Indices_New] = np.random.uniform(size = len(Indices_New))
-
-        ##2.b : Les entreprises existantes ajustent la production par rapport aux ventes précédentes. Prod_Sensibilite entre 0 et 1 et correspond à la sensibilité des entrepeneurs.
-        self.Firm_Production[self.Firm_Existe] = self.Firm_Production[self.Firm_Existe] + self.Prod_Ajust * (self.Firm_Demande[self.Firm_Existe] - self.Firm_Production[self.Firm_Existe])
-        
-        #Mettre en **existe** les entreprises nouvellement créées
+        Indices_New = np.flatnonzero(np.logical_not(self.Firm_Existe))[:N_Entrants] ##Trouver les indices qui son False
+        self.Firm_Production[Indices_New] = 0.0
+        self.Firm_Profit[Indices_New] = 0.0
+        self.Firm_Avoir[Indices_New] = 0.0
+        self.Firm_Credit_Dem[Indices_New] = 0.0
+        self.Firm_Credit_Rec_Bank[Indices_New] = 0.0
+        self.Firm_Credit_Rec_Fonds[Indices_New] = 0.0
+        self.Firm_Invest_Fonds[Indices_New] = 0.0
         self.Firm_Existe[Indices_New] = True
+        self.Firm_Moment_Creation[Indices_New] = iteration
+        
+    def firm_decide_production(self, iteration):
+        new_entrants = np.flatnonzero(self.Firm_Existe & (self.Firm_Moment_Creation == iteration))
+        incumbents = np.flatnonzero(self.Firm_Existe & (self.Firm_Moment_Creation < iteration))
+        
+        if len(incumbents) > 0:
+             ##2.b : Les entreprises existantes ajustent la production par rapport aux ventes précédentes. Prod_Sensibilite entre 0 et 1 et correspond à la sensibilité des entrepeneurs.
+            self.Firm_Production[incumbents] = self.Firm_Production[incumbents] + self.Prod_Ajust * (self.Firm_Demande[incumbents] - self.Firm_Production[incumbents])
+        
+        if len(new_entrants) > 0:
+            if len(incumbents) > 0:
+                self.Firm_Production[new_entrants] = np.random.uniform(0.75, 1.25, size = len(new_entrants)) #* np.mean(self.Firm_Production[self.Firm_Existe])
+            else:
+                self.Firm_Production[new_entrants] = np.random.uniform(size = len(new_entrants))
 
     def firm_credit_dem(self):
 
@@ -276,21 +290,24 @@ class Economy:
         return self.Fonds_Avoir
 
 
-T_Max = 100
+T_Max = 250
 
 
-eco = Economy(Taux_Interet = 0.0, Prime_D = 0.0, Firm_Markup = 0.1, Prod_Ajust = 0.5, 
-            Fonds_Dividende = 0.1, Taux_Invest_Fonds = 0.00, Init_Income = 3.0, Sens_Prix = 1.0, 
+eco = Economy(Taux_Interet = 0.1, Prime_D = 0.1, Firm_Markup = 0.0, Prod_Ajust = 0.3, 
+            Fonds_Dividende = 0.1, Taux_Invest_Fonds = 0.00, Init_Income = 5.0, Sens_Prix = 1.5, 
             N_Firm = T_Max)
 
 gdp = np.zeros(T_Max)
 
 for t in range(T_Max):
-    if t/T_Max > 1.1:
+    if t/T_Max > 10:
         eco.set_prop_durable(t/T_Max)
-    n_entrants = np.random.randint(1, 2)
-    eco.firm_enter(n_entrants)
-    eco.firm_decide_production(n_entrants)
+    if t > 2:
+        n_entrants = np.random.randint(5, 10) * int(1 + round(gdp[t-1]))
+    else:
+        n_entrants = np.random.randint(5, 10)
+    eco.firm_enter(n_entrants, t)
+    eco.firm_decide_production(t)
     #print("---------Step ", t, " ----------------")
     eco.firm_credit_dem()
     #print("Firm Rec Fonds: ", eco.Firm_Credit_Rec_Fonds[eco.Firm_Existe])
@@ -307,7 +324,13 @@ for t in range(T_Max):
     gdp[t] = eco.gross_product()
 
 
+##ajouter des épargnants qui veulent maximiser leur rémunération par leur épargne, épargne investie
+
 plt.plot(gdp)
+
+sum(eco.Firm_Avoir[eco.Firm_Existe])
+
+plt.scatter(eco.Firm_Moment_Creation[eco.Firm_Existe], eco.Firm_Avoir[eco.Firm_Existe])
 
 
 
