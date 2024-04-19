@@ -4,20 +4,35 @@ import numpy as np
 ###Checker si les crédits doivent ou pas aller dans les avoirs des firmes et le faire le cas échéant.
 
 class Economy:
-	def __init__(self, Max_Resource, Res_Recovery_Rate, Taux_Entrep, Taux_Interet, Firm_Fixed_Cost, Prime_D, Firm_Markup, Prod_Adjust, Taux_Invest_Fonds, Init_Wealth, Sens_Prix, Init_Prop_Durable=0.0, N_Firm = 100, tol = 10.0**-6) -> None:
+	def __init__(self, 
+			  	 Max_Resource, Res_Recovery_Rate, 
+			  	 Taux_Entrep, Taux_Interet, 
+				 Firm_Fixed_Cost, Prime_D, Firm_Markup, Labor_Rigidity,
+			  	 Prod_Adjust,
+				 Population, Contract_Duration,
+				 Taux_Invest_Fonds, Init_Wealth, 
+				 Sens_Prix, Init_Prop_Durable=0.0, N_Firm = 100, tol = 10.0**-6) -> None:
 		##resource levels
 		self.Resource = Max_Resource
 		self.Res_Recovery_Rate = Res_Recovery_Rate
 		self.Max_Resource = Max_Resource
 		self.Resource_Threshold = 0.0
 		
+
+
 		#self.Prop_Durable = Init_Prop_Durable  #Proportion minimum de prêt durable, initialement à zero
 		self.Taux_Interet = Taux_Interet #Le taux d'intérêt des Fonds_Avoirs/crédits
 		
 		self.Income = 0.0 ##Income received during iteration
 
 		self.Last_Total_Consumption = 0.0
+
+		self.Prev_Last_Total_Prod = 0.0 #Total production at step t-2
+		self.Last_Total_Prod = 0.0 #Total production at step t-1
 		
+		self.Contract_Duration = Contract_Duration #Number of steps until a hired worker is released
+		self.Population = Population #Total population
+
 		#self.Qualité_Durable = 2.0 #Qualité des produits vendus par les firmes durables, qualité des non-durables à 1
 		#Salaires
 		self.Taux_Entrep = Taux_Entrep #Taux d'entreprenariat: combien on prélève pour la création de nouvelles entreprises
@@ -26,6 +41,7 @@ class Economy:
 		self.Firm_Fixed_Cost = Firm_Fixed_Cost
 		self.Avail_Wealth = Init_Wealth
 		self.Firm_Markup = Firm_Markup
+		self.Labor_Rigidity = Labor_Rigidity
 		self.Taux_Invest_Fonds = Taux_Invest_Fonds
 		self.Taux_Retrait_Fonds = 0.0
 		self.Sens_Prix = Sens_Prix
@@ -46,13 +62,16 @@ class Economy:
 		self.Firm_Moment_Creation = np.zeros(N_Firm) ##Iteration at which firm was created
 
 		self.Firm_Production = np.zeros(N_Firm) #Production de chaque entreprise
+		self.Firm_Labor_Last = np.zeros(N_Firm) #Firm labor need
+		self.Firm_Labor = np.zeros(N_Firm) #Nombre de travailleurs pour chaque itération dans la durée du contrat
+		self.Firm_Labor_Hiring = np.zeros(N_Firm) # amount of labor that the firm needs to recruit
 		self.Firm_Cost = np.zeros(N_Firm) #Niveau des profits faits par l'entreprise
 		self.Firm_Avoir = np.zeros(N_Firm) #Avoir de l'entreprise
 		self.Firm_Credit_Score = np.zeros(N_Firm) ##Indique aux créanciers la qualité de l'entreprise en tant que débiteur
 		self.Firm_Credit_Dem = np.zeros(N_Firm) #Credits demandés
 		self.Firm_Credit_Rec_Bank = np.zeros(N_Firm) #Credits reçu par l'entreprise (octroyé par la banque)
 		self.Firm_Credit_Rec_Fonds = np.zeros(N_Firm)
-		self.Firm_Credit_Miss_Dem_Ratio = np.zeros(N_Firm) #Ratio entre les fonds reçus et les fonds demandés
+		self.Firm_Credit_Rec_Last = np.zeros(N_Firm) #Ratio entre les fonds reçus et les fonds demandés
 		self.Firm_Demande = np.zeros(N_Firm) #Quantités demandées à chacune de entreprises
 		self.Firm_Prix = np.ones(N_Firm) #Prix des entreprises
 
@@ -76,40 +95,58 @@ class Economy:
 
 	def firm_enter(self, prob_durable=0.0, Capital_Dist=np.random.exponential, **dist_kwargs):
 		##Capital available to create firms
-		avail_invest_capital = self.Taux_Entrep * self.Avail_Wealth
+		n_entrepreneurs = self.Taux_Entrep * self.Population
+		### Keep average available wealth for random generation of capital
+		avg_avail_wealth = self.Avail_Wealth / self.Population
+		##Labor of new firms
+		new_firm_labor = np.zeros(np.ceil(n_entrepreneurs * 1.5, dtype = np.int32))
 		##Capital of entering firms
-		new_firm_cap = []
-		while avail_invest_capital > self.Firm_Fixed_Cost:
-			next_firm_cap = min(self.Firm_Fixed_Cost + Capital_Dist(**dist_kwargs), avail_invest_capital)
-			new_firm_cap.append(next_firm_cap)
-			avail_invest_capital -= next_firm_cap
-		###Subtract invested capital from available wealth
-		self.Avail_Wealth -= sum(new_firm_cap)
+		new_firm_cap = np.zeros(np.ceil(n_entrepreneurs * 1.5, dtype = np.int32))
+		n_created = 0
+		while (n_entrepreneurs > self.tol) & (self.Avail_Wealth > self.tol):
+			## Extend array if we still need to create firms
+			if n_created == len(new_firm_labor):
+				new_firm_labor.resize(new_firm_labor, np.ceil(n_created * 1.5, dtype = np.uint32), refcheck = False)
+				new_firm_cap.resize(new_firm_cap, np.ceil(n_created * 1.5, dtype = np.uint32), refcheck = False)
+			## Decide on new firms labor and financial capital, idea:
+			## firm labor depends exponentially on the number of people wanting to associate: each person wants to associate with a certain prob, they all need to agree to be in the same firm
+			## firm capital is the sum of wealth of associates: assuming wealth of population has exponential distribution
+			new_firm_labor[n_created] = np.min(np.random.exponential(1.0), n_entrepreneurs)
+			new_firm_cap[n_created] = np.min(np.random.gamma(new_firm_labor[n_created], avg_avail_wealth), self.Avail_Wealth)
+			### Subtract entrepreneurs and capital from available
+			n_entrepreneurs -= new_firm_labor[n_created]
+			self.Avail_Wealth -= new_firm_cap[n_created]
+			n_created += 1
 
 		##Extend vectors if there is no sufficient place for all active firms
 		if len(new_firm_cap) > (len(self.Firm_Existe) - sum(self.Firm_Existe)):
-			extension_size = len(new_firm_cap) - sum(np.logical_not(self.Firm_Existe))
+			extension_size = len(new_firm_labor) - sum(np.logical_not(self.Firm_Existe))
 			self.Firm_Existe.resize(len(self.Firm_Existe) + extension_size, refcheck = False)
 			self.Firm_Durable.resize(len(self.Firm_Durable) + extension_size, refcheck = False)
 			self.Firm_Last_Production.resize(len(self.Firm_Last_Production) + extension_size, refcheck = False)
 			self.Firm_New_Durable.resize(len(self.Firm_New_Durable) + extension_size, refcheck = False)
 			self.Firm_Production.resize(len(self.Firm_Production) + extension_size, refcheck = False)
+			self.Firm_Labor.resize(len(self.Firm_Labor) + extension_size, refcheck = False)
+			self.Firm_Labor_Last.resize(len(self.Firm_Labor_Last) + extension_size, refcheck = False)
+			self.Firm_Labor_Hiring.resize(len(self.Firm_Labor_Hiring) + extension_size, refcheck = False)
 			self.Firm_Cost.resize(len(self.Firm_Cost) + extension_size, refcheck = False)
 			self.Firm_Avoir.resize(len(self.Firm_Avoir) + extension_size, refcheck = False)
 			self.Firm_Credit_Score.resize(len(self.Firm_Credit_Score) + extension_size, refcheck = False)
 			self.Firm_Credit_Dem.resize(len(self.Firm_Credit_Dem) + extension_size, refcheck = False)
 			self.Firm_Credit_Rec_Bank.resize(len(self.Firm_Credit_Rec_Bank) + extension_size, refcheck = False)
 			self.Firm_Credit_Rec_Fonds.resize(len(self.Firm_Credit_Rec_Fonds) + extension_size, refcheck = False)
-			self.Firm_Credit_Miss_Dem_Ratio.resize(len(self.Firm_Credit_Miss_Dem_Ratio) + extension_size, refcheck = False)
+			self.Firm_Credit_Rec_Last.resize(len(self.Firm_Credit_Rec_Last) + extension_size, refcheck = False)
 			self.Firm_Demande.resize(len(self.Firm_Demande) + extension_size, refcheck = False)
 			self.Firm_Prix.resize(len(self.Firm_Prix) + extension_size, refcheck = False)
 			self.Firm_Moment_Creation.resize(len(self.Firm_Moment_Creation) + extension_size, refcheck = False)
 			self.Prob_Become_Durable.resize(len(self.Prob_Become_Durable) + extension_size, refcheck = False)
 
+			self.Firm_Labor = np.append(self.Firm_Labor, np.zeros((extension_size, self.Contract_Duration)))
+
 			self.Firm_Prix[np.logical_not(self.Firm_Existe)] = 1.0
 		###Initialize new firms
 		#Liste d'indices dispos qui correspondent aux cases qui vont contenir les nouvelles entreprises
-		Indices_Entrants = np.flatnonzero(np.logical_not(self.Firm_Existe))[:len(new_firm_cap)] ##Trouver les indices qui son False
+		Indices_Entrants = np.flatnonzero(np.logical_not(self.Firm_Existe))[:len(new_firm_cap)] ##Trouver les indices qui sont False
 		self.Firm_Last_Production[Indices_Entrants] = 0.0
 		self.Firm_Production[Indices_Entrants] = 0.0
 		self.Firm_Cost[Indices_Entrants] = 0.0
@@ -118,28 +155,26 @@ class Economy:
 		self.Firm_Credit_Dem[Indices_Entrants] = 0.0
 		self.Firm_Credit_Rec_Bank[Indices_Entrants] = 0.0
 		self.Firm_Credit_Rec_Fonds[Indices_Entrants] = 0.0
-		self.Firm_Credit_Miss_Dem_Ratio[Indices_Entrants] = 1.0 ##This is only to avoid paying shareholders the first time
 		self.Firm_Durable[Indices_Entrants] = self.rng.binomial(1, prob_durable, len(new_firm_cap)) == 1
 		self.Firm_Existe[Indices_Entrants] = True
 		self.Firm_Moment_Creation[Indices_Entrants] = self.Iteration
 		self.Prob_Become_Durable[Indices_Entrants] = 0.0
-
 		return len(new_firm_cap)
 
-		
 	def firm_decide_quantity(self):
 		new_entrants = np.flatnonzero(self.Firm_Existe & (self.Firm_Moment_Creation == self.Iteration))
 		incumbents = np.flatnonzero(self.Firm_Existe & (self.Firm_Moment_Creation < self.Iteration))
 		
 		if len(incumbents) > 0:
-			 ##2.b : Les entreprises existantes ajustent la production par rapport aux ventes précédentes. Prod_Sensibilite entre 0 et 1 et correspond à la sensibilité des entrepeneurs.
-			self.Firm_Production[incumbents] = (self.Firm_Last_Production[incumbents] - self.Firm_Production[incumbents]) * \
-											   (1.0 + self.Prod_Adjust * np.random.uniform(0.0, 1.0, len(incumbents)))
-					
+			##2.b : Les entreprises existantes ajustent la production par rapport aux ventes précédentes. Prod_Sensibilite entre 0 et 1 et correspond à la sensibilité des entrepeneurs.
+			self.Firm_Production[incumbents] =  (self.Firm_Last_Production[incumbents] - self.Firm_Production[incumbents]) * \
+										   		(1.0 + self.Prod_Adjust * np.random.uniform(0.0, 1.0, len(incumbents)))
+			
 		if len(new_entrants) > 0:
-			self.Firm_Production[new_entrants] = ((self.Firm_Avoir[new_entrants] - self.Firm_Fixed_Cost) / \
-					  							   self.Salaire / (1.0 + self.Prime_D * self.Firm_Durable[new_entrants])) * \
-												 np.random.uniform(0.75, 1.25, size = len(new_entrants))
+			self.Firm_Production[new_entrants] = np.maximum((self.Firm_Avoir[new_entrants] - self.Firm_Fixed_Cost) / \
+					  							   		 	self.Salaire / (1.0 + self.Prime_D * self.Firm_Durable[new_entrants]) * \
+												 		 	np.random.uniform(0.75, 1.25, size = len(new_entrants)),
+														 	self.Firm_Labor[new_entrants])
 
 		##Initialisation des coûts aux coûts fixes
 		self.Firm_Cost[self.Firm_Existe] = self.Firm_Fixed_Cost
@@ -149,9 +184,9 @@ class Economy:
 	##Firms decide on their assets depending on next funds
 	def firm_budgetize_and_pay_shareholders_static(self, prop_cost_keep=0.0):
 		###Total payments to shareholders
-		tot_sh_pay = sum(np.maximum(self.Firm_Avoir[self.Firm_Existe] - prop_cost_keep * self.Salaire * (1.0 + self.Prime_D * self.Firm_Durable[self.Firm_Existe]) * self.Firm_Production[self.Firm_Existe] - \
-									  self.Firm_Fixed_Cost,
-									  0.0))
+		tot_sh_pay = np.sum(np.maximum(self.Firm_Avoir[self.Firm_Existe] - prop_cost_keep * self.Salaire * (1.0 + self.Prime_D * self.Firm_Durable[self.Firm_Existe]) * self.Firm_Production[self.Firm_Existe] - \
+									   self.Firm_Fixed_Cost,
+									   0.0))
 		##Pay shareholders
 		self.Avail_Wealth += tot_sh_pay
 		self.Income += tot_sh_pay
@@ -164,22 +199,21 @@ class Economy:
 	
 	##Firms decide on their assets depending on next funds and credit received relatively to demanded
 	def firm_budgetize_and_pay_shareholders_dynamic(self, min_prop_cost_keep):
-		tot_sh_pay = sum(np.maximum(self.Firm_Avoir[self.Firm_Existe] - 
-			      					np.maximum(self.Firm_Credit_Miss_Dem_Ratio[self.Firm_Existe], min_prop_cost_keep) * \
-						 			self.Salaire * (1.0 + self.Prime_D * self.Firm_Durable[self.Firm_Existe]) * self.Firm_Production[self.Firm_Existe] - \
-						 			self.Firm_Fixed_Cost,
-									0.0))
+		tot_sh_pay = np.sum(np.maximum(self.Firm_Avoir[self.Firm_Existe] - 
+			      					   np.maximum(self.Firm_Credit_Rec_Last[self.Firm_Existe], min_prop_cost_keep) * \
+						 			   self.Salaire * (1.0 + self.Prime_D * self.Firm_Durable[self.Firm_Existe]) * self.Firm_Production[self.Firm_Existe] - \
+						 			   self.Firm_Fixed_Cost,
+									   0.0))
 		##Pay shareholders
 		self.Avail_Wealth += tot_sh_pay
 		self.Income += tot_sh_pay
 		## Update firms assets
-		self.Firm_Avoir[self.Firm_Existe] = np.minimum(np.maximum(self.Firm_Credit_Miss_Dem_Ratio[self.Firm_Existe], min_prop_cost_keep) * \
-						 							   self.Salaire * (1.0 + self.Prime_D * self.Firm_Durable[self.Firm_Existe]) * self.Firm_Production[self.Firm_Existe] + \
-						 							   self.Firm_Fixed_Cost,
-													   self.Firm_Avoir[self.Firm_Existe])
+		firm_op_cost = self.Salaire * (1.0 + self.Prime_D * self.Firm_Durable[self.Firm_Existe]) * self.Firm_Production[self.Firm_Existe] + \
+					   self.Firm_Fixed_Cost
+		self.Firm_Avoir[self.Firm_Existe] = np.maximum(firm_op_cost - self.Firm_Credit_Rec_Last[self.Firm_Existe],
+													   firm_op_cost * min_prop_cost_keep)
 		
 		return self.Firm_Avoir[self.Firm_Existe]
-
 
 	def firm_decide_credit(self):
 		##Firms decisde on how much credit they need
@@ -232,7 +266,6 @@ class Economy:
 			if from_fund:
 				self.Fonds_Avoir = max(avail_credit, 0.0)
 
-
 	def firm_credit_dem_fund(self, cs_importance=1.0):
 		### Initialisation
 		#Fonds  : "invetsissement" correspond à la qté totale de fonds disponible dans le fonds.
@@ -254,7 +287,6 @@ class Economy:
 		self.Firm_Cost[self.Firm_Existe] += self.Taux_Interet * self.Firm_Credit_Rec_Fonds[self.Firm_Existe]
 
 		return self.Firm_Credit_Rec_Fonds[self.Firm_Existe]
-
 
 	def firm_credit_dem_bank(self, cs_importance= 1.0, sens_new_info=1.0, prob_transform= lambda x: x):
 		##To select the right firms
@@ -318,9 +350,7 @@ class Economy:
 
 		##Calcul du ratio entre fonds obtenus et fonds demandés
 		firm_cmdr = self.Firm_Existe & (self.Firm_Credit_Score < np.Inf) & np.logical_not(self.Firm_Durable)
-		self.Firm_Credit_Miss_Dem_Ratio[firm_cmdr] = self.Firm_Credit_Dem[firm_cmdr] / \
-							      					 (self.Firm_Credit_Dem[firm_cmdr] + self.Firm_Credit_Rec_Bank[firm_cmdr] + self.Firm_Credit_Rec_Fonds[firm_cmdr])
-		self.Firm_Credit_Miss_Dem_Ratio[self.Firm_Existe & (self.Firm_Credit_Score == np.Inf)] = 0.0			
+		self.Firm_Credit_Rec_Last[self.Firm_Existe] = self.Firm_Credit_Rec_Bank[firm_cmdr] + self.Firm_Credit_Rec_Fonds[firm_cmdr]
 
 		###Mise à jour des coûts
 		self.Firm_Cost[self.Firm_Existe] += self.Taux_Interet * self.Firm_Credit_Rec_Bank[self.Firm_Existe]
@@ -329,7 +359,24 @@ class Economy:
 		self.Firm_Durable[self.Firm_Existe] = self.Firm_Durable[self.Firm_Existe] | self.Firm_New_Durable[self.Firm_Existe]
 
 		return self.Firm_Credit_Rec_Bank[self.Firm_Existe]
-			
+
+	##Apply financial constraint: cannot produce more than what funds allow
+	def firm_adjust_production_to_equity(self):
+		self.Firm_Production[self.Firm_Existe] = np.minimum(self.Firm_Production[self.Firm_Existe],
+															np.maximum(0.0,
+			  														   (self.Firm_Avoir[self.Firm_Existe] - self.Firm_Fixed_Cost) / self.Salaire / \
+																	   (1.0 + self.Prime_D * self.Firm_Durable[self.Firm_Existe])))
+
+
+	def firm_hire(self, hire_size_advantage):
+		## Firms adjust their
+		recruiting = self.Firm_Existe & (self.Firm_Labor_Hiring > self.tol)
+		while (self.Free_Labor > self.tol) and np.any(recruiting):
+			n_recruiting = np.sum(recruiting)
+			ind_rectuitement = np.min(self.Free_Labor / n_recruiting, np.min(self.Firm_New_Labor_Need[recruiting]))
+			self.Firm_Labor[self.Firm_Existe, 0] += ind_rectuitement
+			self.Free_Labor = np.min(0, self.Free_Labor - ind_rectuitement * n_recruiting)
+
 
 	def firm_produce(self):
 		###Les firmes ayant décidé de rester non durables mettent à jour la quantité qu'elles vont produire
@@ -349,6 +396,8 @@ class Economy:
 		else:
 			raise ValueError("Not enough resources!")
 
+		self.Prev_Last_Total_Prod = self.Last_Total_Prod
+		self.Last_Total_Prod = np.sum(self.Firm_Last_Production[self.Firm_Existe])
 
 		self.Firm_Last_Production[self.Firm_Existe] = self.Firm_Production[self.Firm_Existe]
 
@@ -424,7 +473,6 @@ class Economy:
 		self.Avail_Wealth -= prop_cons * self.Avail_Wealth - avail_to_consume
 
 		return self.Last_Total_Consumption
-	
 
 	def firm_pay_bank(self):
 		###Ici, il ne s'agit pas de Crédit reçu à proprement parler, mais on stocke les créances vis à vis
@@ -443,6 +491,7 @@ class Economy:
 		self.Firm_Avoir[self.Firm_Existe] -= (1.0+self.Taux_Interet) * self.Firm_Credit_Rec_Bank[self.Firm_Existe]
 
 		return self.Firm_Avoir[self.Firm_Existe]
+
 
 	###Remboursement du fonds
 	def firm_pay_fund(self):
@@ -486,6 +535,13 @@ class Economy:
 	def firm_exit(self) -> None:
 		###Calculate number of firms exits
 		n_exits = np.sum(self.Firm_Existe)
+		### Exiting firms
+		exiting = self.Firm_Existe[self.Firm_Existe] &\
+				  (self.Firm_Avoir[self.Firm_Existe] < self.tol)
+		#### Free labor of exiting firms
+		self.Free_Labor += np.sum(self.Firm_Labor[exiting, :])
+		#### Put labor of exiting firms to 0
+		self.Firm_Labor[exiting, :] = 0.0
 		###Firmes qui ont un avoir négatif quittent le marché
 		self.Firm_Existe[self.Firm_Existe] &= (self.Firm_Avoir[self.Firm_Existe] >= self.tol)
 		##To return number of exits
@@ -500,6 +556,14 @@ class Economy:
 		self.Avail_Wealth -= curr_invest_fonds
 
 		return self.Fonds_Avoir
+
+	def update_salary(self, m_e):
+		if (self.Prev_Last_Total_Prod > 0) & (self.Last_Total_Prod > 0):
+			if ((self.Last_Total_Prod / self.Prev_Last_Total_Prod - 1) > self.Labor_Rigidity) |\
+			   ((self.Last_Total_Prod / self.Prev_Last_Total_Prod - 1) < -self.Labor_Rigidity):
+				self.Salaire *= (self.Last_Total_Prod / self.Prev_Last_Total_Prod)**m_e
+				self.Firm_Fixed_Cost *= (self.Last_Total_Prod / self.Prev_Last_Total_Prod)**m_e
+		return self.Salaire
 
 	def recover_resource(self):
 		self.Resource = min(self.Resource + self.Res_Recovery_Rate * self.Resource * (1.0 - self.Resource / self.Max_Resource),

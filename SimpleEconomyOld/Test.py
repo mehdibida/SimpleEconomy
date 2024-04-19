@@ -23,10 +23,13 @@ n_ndur_fin = np.zeros(len(t_invest_val))
 q_dur_fin = np.zeros(len(t_invest_val))
 q_ndur_fin = np.zeros(len(t_invest_val))
 
+np.array([i for i in range(6)])[1:]
+
+
 for tif in range(len(t_invest_val)):
 
-	eco = Economy(Max_Resource= 0.2 * 10.0**7, Res_Recovery_Rate= .5, Taux_Entrep= 0.005, Taux_Interet= 0.07, Firm_Fixed_Cost= .5, Prime_D = 0.1, Firm_Markup = 0.05, Prod_Adjust = 0.333, 
-				  Taux_Invest_Fonds= t_invest_val[tif], Init_Wealth= 500.0, Sens_Prix = 1.0, N_Firm = T_Max)
+	eco = Economy(Max_Resource= 0.2 * 10.0**7, Res_Recovery_Rate= .5, Taux_Entrep= 0.005, Taux_Interet= 0.07, Firm_Fixed_Cost= .5, Prime_D = 0.1, Firm_Markup = 0.1, 
+			      Labor_Rigidity=0.0, Prod_Adjust = 0.333, Taux_Invest_Fonds= t_invest_val[tif], Init_Wealth= 500.0, Sens_Prix = 1.0, N_Firm = T_Max)
 
 	resource_level = np.zeros(T_Max)
 	gdp = np.zeros(T_Max)
@@ -39,7 +42,7 @@ for tif in range(len(t_invest_val)):
 	n_firms_exit = np.zeros(T_Max)
 	n_firms_entry = np.zeros(T_Max)
 	fonds_avoir = np.zeros(T_Max)
-
+	salaire = np.zeros(T_Max)
 
 	sus_consumed_quantity = np.zeros(T_Max)
 	n_sus_consumed_quantity = np.zeros(T_Max)
@@ -75,8 +78,7 @@ for tif in range(len(t_invest_val)):
 		#eco.Fonds_Avoir = 0.04
 		eco.firm_credit_dem_fund()
 		#eco.Firm_Credit_Rec_Fonds[eco.Firm_Existe]
-		if eco.Resource > 1.0 * eco.Max_Resource:
-			eco.firm_credit_dem_bank(sens_new_info= 0.5, prob_transform= lambda x : x**1.0)
+		eco.firm_credit_dem_bank(sens_new_info= 0.5, prob_transform= lambda x : x**1.0)
 		#print("Credit rec.:", eco.Firm_Credit_Rec_Bank[eco.Firm_Existe])
 		#time.sleep(0.5)
 		#input()
@@ -98,10 +100,11 @@ for tif in range(len(t_invest_val)):
 		#input()
 		eco.firm_pay_salary() ##income ++
 		eco.cons_invest_fund() ## wealth --
-		eco.consume_max_wealth(prop_cons= 1.0) ## wealth --
+		eco.consume_max_wealth(prop_cons= .5) ## wealth --
 		eco.firm_pay_fund() ## fonds ++
 		eco.firm_pay_bank() ## wealth ++, but not income
 		eco.cons_withdraw_fund(sens_new_info=0.5)
+		salaire[t] = eco.update_salary(0.7)
 		eco.recover_resource()
 		n_firms_exit[t] = eco.firm_exit()
 		eco.increment_iteration()
@@ -138,7 +141,9 @@ for tif in range(len(t_invest_val)):
 #t1 - t0
 
 ##ajouter des épargnants qui veulent maximiser leur rémunération par leur épargne, épargne investie
-plt.plot(gdp); plt.show();
+plt.plot(np.log(gdp[gdp > 0] / salaire[gdp > 0])); plt.plot(np.log(gdp[gdp > 0])); plt.show();
+
+plt.plot(gdp)
 
 #plt.hist(eco.Firm_Avoir[eco.Firm_Existe])
 
@@ -152,17 +157,19 @@ plt.plot(total_avail_wlth * eco.Taux_Entrep); plt.show();
 
 plt.plot(resource_level) ; plt.show();
 
-
 plt.plot(resource_level * eco.Res_Recovery_Rate * (1.0 - resource_level / eco.Max_Resource));
 plt.plot(n_sus_prod_quantity, c = 'red'); plt.plot(n_sus_prod_quantity_new, c = 'green');
+plt.plot(n_sus_prod_quantity + n_sus_prod_quantity_new, c = 'blue');
+
+plt.plot(np.diff(n_sus_prod_quantity[:370] + n_sus_prod_quantity_new[:370]), c = 'blue');
+
+
 plt.plot(n_sus_prod_quantity_new);
 plt.show();
 
 plt.plot(n_firms - n_firms_durable, c= 'red'); plt.plot(n_firms_durable, c = 'green'); plt.show()
 
-plt.plot(n_sus_consumed_quantity, c = 'red'); 
-plt.plot(sus_consumed_quantity, c = 'green');
-plt.show();
+plt.plot(n_sus_consumed_quantity, c = 'red'); plt.plot(sus_consumed_quantity, c = 'green'); plt.show();
 plt.plot(sus_consumed_quantity / (n_sus_consumed_quantity + sus_consumed_quantity), c = 'green'); plt.show()
 
 plt.scatter(eco.Firm_Moment_Creation[eco.Firm_Existe], eco.Firm_Avoir[eco.Firm_Existe], c = np.where(eco.Firm_Durable[eco.Firm_Existe], 'green', 'red')); plt.show()
@@ -184,6 +191,11 @@ plt.loglog(fonds_avoir); plt.show()
 plt.loglog(np.sort(eco.Firm_Last_Production[eco.Firm_Existe])[::-1])
 
 plt.plot(np.sort(eco.Firm_Last_Production[eco.Firm_Existe])[::-1])
+
+plt.plot(np.log(salaire[salaire > 0]))
+eco.Prev_Last_Total_Prod
+eco.Last_Total_Prod
+
 
 plt.plot(n_firms_exit);
 plt.plot(n_firms_entry);
