@@ -1,9 +1,12 @@
 
-
 import numpy as np
 import matplotlib.pyplot as plt
 import time
 import gc
+import importlib
+
+import SimpleEconomy
+importlib.reload(SimpleEconomy)
 
 from SimpleEconomy import Economy
 
@@ -11,12 +14,13 @@ from SimpleEconomy import Economy
 eco = Economy(Max_Resource = 10_000,  Res_Recovery_Rate = 1.0, 
               Taux_Entrep = 0.001,
               Sustainability_Interest_Rate_Mult = 1.0,
+              sus_lvl_sens = 2.0,
               Prod_Adjust = 0.3,
               Init_Wealth = 1000,
               Sustainability_Cost_Mult = 0.005,
               N_Firm = 100, tol = 10.0**-6)
 
-T_Max = 10000
+T_Max = 15000
 
 resource = np.zeros(T_Max)
 n_firms_entry = np.zeros(T_Max)

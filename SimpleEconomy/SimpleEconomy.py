@@ -11,6 +11,7 @@ class Economy:
 			  	 Prod_Adjust,
 				 Init_Wealth,
 				 Sustainability_Cost_Mult,
+				 sus_lvl_sens,
 				 N_Firm = 100, tol = 10.0**-6) -> None:
 		##resource levels
 		self.Resource = Max_Resource
@@ -19,6 +20,7 @@ class Economy:
 				
 		self.Sustainability_Cost_Mult = Sustainability_Cost_Mult ## Factor determining the final cost of being sustainable
 		self.Sustainability_Interest_Rate_Mult = Sustainability_Interest_Rate_Mult
+		self.sus_lvl_sens = sus_lvl_sens ## Sensitivity to the level of sustainability
 
 		#self.Population = Population #Total population
 		self.Taux_Entrep = Taux_Entrep #Taux d'entreprenariat: combien on prélève pour la création de nouvelles entreprises
@@ -61,7 +63,7 @@ class Economy:
 			## Decide on new firms capital: random initial capital
 			new_firm_capital[n_created] = min(Capital_Dist(**dist_kwargs), n_avail_capital)
 			## Decide on new firms sustainability levels
-			new_firm_sus[n_created] = np.random.uniform(0.0, 1.0)
+			new_firm_sus[n_created] = np.minimum(np.random.uniform(0.0, 1.05), 1.0)
 			### Subtract entrepreneurs and capital from available
 			n_avail_capital -= new_firm_capital[n_created]
 			n_created += 1
@@ -101,14 +103,14 @@ class Economy:
 		entrants = self.Firm_Existe & (self.Firm_Moment_Creation == self.Iteration)
 		if np.any(entrants):
 			self.Firm_Production[entrants] = self.Firm_Avoir[entrants] /\
-											 (1.0 + self.Sustainability_Cost_Mult * np.arctanh(self.Firm_Sustainability[entrants])) *\
+											 (1.0 + self.Sustainability_Cost_Mult * self.Firm_Sustainability[entrants]) *\
 											 2.0**np.random.uniform(-0.4, 0.4, np.sum(entrants))
 		
-		return self.Firm_Production
+		return np.sum(self.Firm_Production[self.Firm_Existe])
 
 	def firm_pay_dividend(self):
 		self.Firm_Prod_Cost[self.Firm_Existe] = self.Firm_Production[self.Firm_Existe] *\
-											 	(1.0 + self.Sustainability_Cost_Mult * np.arctanh(self.Firm_Sustainability[self.Firm_Existe]))
+											 	(1.0 + self.Sustainability_Cost_Mult * self.Firm_Sustainability[self.Firm_Existe])
 
 		self.Avail_Wealth += np.sum(np.maximum(0.0,
 								  			   self.Firm_Avoir[self.Firm_Existe] - 
@@ -118,7 +120,7 @@ class Economy:
 
 	def firm_get_credit(self):
 		self.Firm_Prod_Cost[self.Firm_Existe] = self.Firm_Production[self.Firm_Existe] *\
-											 	(1.0 + self.Sustainability_Cost_Mult * np.arctanh(self.Firm_Sustainability[self.Firm_Existe]))
+											 	(1.0 + self.Sustainability_Cost_Mult * self.Firm_Sustainability[self.Firm_Existe]**self.sus_lvl_sens)
 		##Firms decide on how much credit they need
 		self.Firm_Credit[self.Firm_Existe] = np.maximum(0.0, self.Firm_Prod_Cost[self.Firm_Existe] - self.Firm_Avoir[self.Firm_Existe])
 		###Update firms assets
